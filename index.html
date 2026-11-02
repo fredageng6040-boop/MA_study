@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Listening Study / 听力研究</title>
+
+  <!-- ===================== jsPsych v7.2（两个任务所用插件的合集） ===================== -->
+  <script src="https://unpkg.com/jspsych@7.2.3"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-preload@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-html-button-response@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-audio-keyboard-response@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-audio-button-response@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-survey-html-form@1.0.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-instructions@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-fullscreen@1.1.1"></script>
+  <script src="https://unpkg.com/@jspsych/plugin-call-function@1.1.1"></script>
+  <link rel="stylesheet" href="https://unpkg.com/jspsych@7.2.3/css/jspsych.css">
+
+  <!-- ===================== Firebase v8.10.0 (Realtime Database) ===================== -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+  <style>
+    body { font-family: "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .jspsych-content { max-width: 820px; line-height: 1.65; }
+    .text-left { text-align: left; }
+    .en { color: #666; font-size: 0.9em; display: block; margin-top: 2px; }
+    .form-row { margin: 16px 0; text-align: left; }
+    .form-row label { display: inline-block; width: 300px; vertical-align: top; }
+    .form-row input, .form-row select { padding: 4px 8px; font-size: 16px; }
+    .jspsych-btn { line-height: 1.4; }
+    .status-msg { max-width: 640px; margin: 15vh auto 0; padding: 0 16px; text-align: center; line-height: 1.65; }
+    /* perception experiment */
+    .fixation { font-size: 60px; }
+    .key-hint { font-size: 20px; margin-top: 30px; display: flex; justify-content: center; gap: 60px; }
+    .key-hint div { text-align: center; }
+    .key-hint b { display: inline-block; border: 2px solid #333; border-radius: 6px; padding: 2px 14px; margin-bottom: 6px; font-size: 22px; }
+    .example { background: #f4f4f4; border-radius: 6px; padding: 8px 14px; margin: 8px 0; }
+    /* naturalness questionnaire */
+    .progress { color: #888; font-size: 14px; margin-bottom: 8px; }
+    .play-row { margin: 10px 0 24px; }
+    .play-status { color: #666; font-size: 14px; margin-top: 6px; min-height: 1.4em; }
+    .scale { display: flex; justify-content: center; gap: 4px; margin: 8px 0 2px; }
+    .scale label { display: flex; flex-direction: column; align-items: center; width: 56px; cursor: pointer; font-size: 18px; }
+    .scale input { width: 20px; height: 20px; margin-top: 6px; cursor: pointer; }
+    .scale-ends { display: flex; justify-content: space-between; width: 420px; max-width: 100%; margin: 0 auto 20px; font-size: 14px; }
+    .scale-ends .en { font-size: 13px; }
+    .rationale { width: 100%; box-sizing: border-box; font-size: 15px; padding: 6px 8px; margin-top: 6px; }
+    fieldset { border: none; padding: 0; margin: 0; }
+    fieldset:disabled { opacity: 0.45; }
+  </style>
+</head>
+<body></body>
+<script>
+/* =====================================================================
+ * 统一入口：知情同意 → 资格筛选 → 设备检查 → 音量检测 → 随机分配 → 对应任务
+ *   perception  = 原 experiment.html 的任务
+ *   naturalness = 原 questionnaire.html 的任务
+ * 两个任务的刺激呈现、试次顺序、反应记录、反应时与保存内容均与原文件相同。
+ * ===================================================================== */
+
+/* =====================================================================
+ * 1. 配置区 CONFIGURATION
+ * ===================================================================== */
+
+// 1a. Firebase 配置（与原文件相同）
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyAcEEu_ujU_c-R8Jeu38vnwV4xQ-iFTZF0",
+  authDomain: "ma-thesis-4399.firebaseapp.com",
+  databaseURL: "https://ma-thesis-4399-default-rtdb.firebaseio.com",
+  projectId: "ma-thesis-4399",
+  storageBucket: "ma-thesis-4399.firebasestorage.app",
+  messagingSenderId: "476843186772",
+  appId: "1:476843186772:web:af3f0d73a7bcaf5c5b6bc1"
+};
+
+// 1b. 数据节点：试跑用下面的 test 节点；IRB 批准、正式收数据前三个一起改
+//     正式示例：ALLOC_ROOT = "allocation_v1"，DB_ROOT = { perception: "shenme_experiment_v1", naturalness: "naturalness_questionnaire_v1" }
+const ALLOC_ROOT = "allocation_test";
+const DB_ROOT = { perception: "test_run", naturalness: "test_run_questionnaire" };
+
+// 1c. 每组计划分配人数（按“已分配”计数，中途退出不释放名额；两组都分满后显示招募已满）
+//     database.rules.json 中的上限 80 需与此一致
+const QUOTA = { perception: 80, naturalness: 80 };
+
+// 1d. 浏览器本地保存 participant code 的键名；连接 Firebase 的超时（毫秒）
+const PID_STORAGE_KEY = "shenme_study_pid";
+const NETWORK_TIMEOUT = 20000;
+
+// 1e. 音量检测（两组共用，在分配之前进行）
+const CHECK_ITEMS = [
+  { file: "apple.wav",      zh: "苹果", en: "apple" },
+  { file: "banana.wav",     zh: "香蕉", en: "banana" },
+  { file: "watermelon.wav", zh: "西瓜", en: "watermelon" },
+];
+const CHECK_MAX_ATTEMPTS = 3;
+
+// 1f. perception：反应类别、按键平衡、反应时限、指导语例句、练习（correct 用于练习反馈）
+const CATEGORIES = {
+  wh: { code: "wh", zh: "在提问", en: "Question", enDesc: "“shenme” = <i>what?</i>" },
+  ex: { code: "ex", zh: "指“某个东西”", en: "Existential", enDesc: "“shenme” = <i>something</i>" }
+};
+const COUNTERBALANCE_KEYS = true;
+const RESPONSE_WINDOW = null;
+const EXAMPLE_WH = "他想吃点什么？我给他做。";
+const EXAMPLE_EX = "他想吃点什么。那就吃吧。";
+const PERCEPTION_PRACTICE = [
+  { file: "P1.wav", item: "P1", condition: "practice", correct: "wh" },
+  { file: "P2.wav", item: "P2", condition: "practice", correct: "ex" },
+  { file: "P3.wav", item: "P3", condition: "practice", correct: "wh" },
+  { file: "P4.wav", item: "P4", condition: "practice", correct: "ex" },
+];
+
+// 1g. naturalness：七级量表、练习（不给反馈）
+const SCALE_MIN = 1;
+const SCALE_MAX = 7;
+const SCALE_LOW  = { zh: "非常不自然", en: "very unnatural" };
+const SCALE_HIGH = { zh: "非常自然",   en: "very natural" };
+const NATURALNESS_PRACTICE = [
+  { file: "P1.wav", item: "P1", condition: "practice" },
+  { file: "P2.wav", item: "P2", condition: "practice" },
+];
+
+// 1h. 正式语料（两个任务相同，共 96 条）
+const MAIN_STIMULI = [
+  { file: "1_INT_BA_CS_1_T.wav", item: "1", condition: "INT", f1: "BA", f2: "CS", f3: "1", f4: "T" },
+  { file: "2_INT_LE_CS_1_T.wav", item: "2", condition: "INT", f1: "LE", f2: "CS", f3: "1", f4: "T"},
+  { file: "3_INT_MA_CF_1_T.wav", item: "3", condition: "INT", f1: "MA", f2: "CF", f3: "1", f4: "T"},
+  { file: "4_INT_BA_CS_1_R.wav", item: "4", condition: "INT", f1: "BA", f2: "CS", f3: "1", f4: "R"},
+  { file: "5_INT_LE_CS_1_R.wav", item: "5", condition: "INT", f1: "LE", f2: "CS", f3: "1", f4: "R"},
+  { file: "6_INT_MA_CF_1_R.wav", item: "6", condition: "INT", f1: "MA", f2: "CF", f3: "1", f4: "R"},
+  { file: "7_INT_BA_CS_1_PI.wav", item: "7", condition: "INT", f1: "BA", f2: "CS", f3: "1", f4: "PI"},
+  { file: "8_INT_LE_CS_1_PI.wav", item: "8", condition: "INT", f1: "LE", f2: "CS", f3: "1", f4: "PI"},
+  { file: "9_INT_MA_CF_1_PI.wav", item: "9", condition: "INT", f1: "MA", f2: "CF", f3: "1", f4: "PI"},
+  { file: "10_INT_BA_CS_1_PA.wav", item: "10", condition: "INT", f1: "BA", f2: "CS", f3: "1", f4: "PA"},
+  { file: "11_INT_LE_CS_1_PA.wav", item: "11", condition: "INT", f1: "LE", f2: "CS", f3: "1", f4: "PA"},
+  { file: "12_INT_MA_CF_1_PA.wav", item: "12", condition: "INT", f1: "MA", f2: "CF", f3: "1", f4: "PA"},
+  { file: "13_INT_BA_CS_2_N.wav", item: "13", condition: "INT", f1: "BA", f2: "CS", f3: "2", f4: "N"},
+  { file: "14_INT_LE_CS_2_N.wav", item: "14", condition: "INT", f1: "LE", f2: "CS", f3: "2", f4: "N"},
+  { file: "15_INT_MA_CF_2_N.wav", item: "15", condition: "INT", f1: "MA", f2: "CF", f3: "2", f4: "N"},
+  { file: "16_INT_BA_CS_2_D.wav", item: "16", condition: "INT", f1: "BA", f2: "CS", f3: "2", f4: "D"},
+  { file: "17_INT_LE_CS_2_D.wav", item: "17", condition: "INT", f1: "LE", f2: "CS", f3: "2", f4: "D"},
+  { file: "18_INT_MA_CF_2_D.wav", item: "18", condition: "INT", f1: "MA", f2: "CF", f3: "2", f4: "D"},
+  { file: "19_INT_BA_CS_2_X.wav", item: "19", condition: "INT", f1: "BA", f2: "CS", f3: "2", f4: "X"},
+  { file: "20_INT_LE_CS_2_X.wav", item: "20", condition: "INT", f1: "LE", f2: "CS", f3: "2", f4: "X"},
+  { file: "21_INT_MA_CF_2_X.wav", item: "21", condition: "INT", f1: "MA", f2: "CF", f3: "2", f4: "X"},
+  { file: "22_INT_BA_CS_2_W.wav", item: "22", condition: "INT", f1: "BA", f2: "CS", f3: "2", f4: "W"},
+  { file: "23_INT_LE_CS_2_W.wav", item: "23", condition: "INT", f1: "LE", f2: "CS", f3: "2", f4: "W"},
+  { file: "24_INT_MA_CF_2_W.wav", item: "24", condition: "INT", f1: "MA", f2: "CF", f3: "2", f4: "W"},
+  { file: "25_INT_BA_CS_3_M.wav", item: "25", condition: "INT", f1: "BA", f2: "CS", f3: "3", f4: "M"},
+  { file: "26_INT_LE_CS_3_M.wav", item: "26", condition: "INT", f1: "LE", f2: "CS", f3: "3", f4: "M"},
+  { file: "27_INT_MA_CF_3_M.wav", item: "27", condition: "INT", f1: "MA", f2: "CF", f3: "3", f4: "M"},
+  { file: "28_INT_BA_CS_3_X.wav", item: "28", condition: "INT", f1: "BA", f2: "CS", f3: "3", f4: "X"},
+  { file: "29_INT_LE_CS_3_X.wav", item: "29", condition: "INT", f1: "LE", f2: "CS", f3: "3", f4: "X"},
+  { file: "30_INT_MA_CF_3_X.wav", item: "30", condition: "INT", f1: "MA", f2: "CF", f3: "3", f4: "X"},
+  { file: "31_INT_BA_CS_3_Q.wav", item: "31", condition: "INT", f1: "BA", f2: "CS", f3: "3", f4: "Q"},
+  { file: "32_INT_LE_CS_3_Q.wav", item: "32", condition: "INT", f1: "LE", f2: "CS", f3: "3", f4: "Q"},
+  { file: "33_INT_MA_CF_3_Q.wav", item: "33", condition: "INT", f1: "MA", f2: "CF", f3: "3", f4: "Q"},
+  { file: "34_INT_BA_CS_3_J.wav", item: "34", condition: "INT", f1: "BA", f2: "CS", f3: "3", f4: "J"},
+  { file: "35_INT_LE_CS_3_J.wav", item: "35", condition: "INT", f1: "LE", f2: "CS", f3: "3", f4: "J"},
+  { file: "36_INT_MA_CF_3_J.wav", item: "36", condition: "INT", f1: "MA", f2: "CF", f3: "3", f4: "J"},
+  { file: "37_INT_BA_CS_4_M.wav", item: "37", condition: "INT", f1: "BA", f2: "CS", f3: "4", f4: "M"},
+  { file: "38_INT_LE_CS_4_M.wav", item: "38", condition: "INT", f1: "LE", f2: "CS", f3: "4", f4: "M"},
+  { file: "39_INT_MA_CF_4_M.wav", item: "39", condition: "INT", f1: "MA", f2: "CF", f3: "4", f4: "M"},
+  { file: "40_INT_BA_CS_4_J.wav", item: "40", condition: "INT", f1: "BA", f2: "CS", f3: "4", f4: "J"},
+  { file: "41_INT_LE_CS_4_J.wav", item: "41", condition: "INT", f1: "LE", f2: "CS", f3: "4", f4: "J"},
+  { file: "42_INT_MA_CF_4_J.wav", item: "42", condition: "INT", f1: "MA", f2: "CF", f3: "4", f4: "J"},
+  { file: "43_INT_BA_CS_4_H.wav", item: "43", condition: "INT", f1: "BA", f2: "CS", f3: "4", f4: "H"},
+  { file: "44_INT_LE_CS_4_H.wav", item: "44", condition: "INT", f1: "LE", f2: "CS", f3: "4", f4: "H"},
+  { file: "45_INT_MA_CF_4_H.wav", item: "45", condition: "INT", f1: "MA", f2: "CF", f3: "4", f4: "H"},
+  { file: "46_INT_BA_CS_4_Z.wav", item: "46", condition: "INT", f1: "BA", f2: "CS", f3: "4", f4: "Z"},
+  { file: "47_INT_LE_CS_4_Z.wav", item: "47", condition: "INT", f1: "LE", f2: "CS", f3: "4", f4: "Z"},
+  { file: "48_INT_MA_CF_4_Z.wav", item: "48", condition: "INT", f1: "MA", f2: "CF", f3: "4", f4: "Z"},
+  { file: "49_DEC_BA_CF_1_T.wav", item: "49", condition: "DEC", f1: "BA", f2: "CF", f3: "1", f4: "T"},
+  { file: "50_DEC_LE_CS_1_T.wav", item: "50", condition: "DEC", f1: "LE", f2: "CS", f3: "1", f4: "T"},
+  { file: "51_DEC_MA_CS_1_T.wav", item: "51", condition: "DEC", f1: "MA", f2: "CS", f3: "1", f4: "T"},
+  { file: "52_DEC_BA_CF_1_R.wav", item: "52", condition: "DEC", f1: "BA", f2: "CF", f3: "1", f4: "R"},
+  { file: "53_DEC_LE_CS_1_R.wav", item: "53", condition: "DEC", f1: "LE", f2: "CS", f3: "1", f4: "R"},
+  { file: "54_DEC_MA_CS_1_R.wav", item: "54", condition: "DEC", f1: "MA", f2: "CS", f3: "1", f4: "R"},
+  { file: "55_DEC_BA_CF_1_PI.wav", item: "55", condition: "DEC", f1: "BA", f2: "CF", f3: "1", f4: "PI"},
+  { file: "56_DEC_LE_CS_1_PI.wav", item: "56", condition: "DEC", f1: "LE", f2: "CS", f3: "1", f4: "PI"},
+  { file: "57_DEC_MA_CS_1_PI.wav", item: "57", condition: "DEC", f1: "MA", f2: "CS", f3: "1", f4: "PI"},
+  { file: "58_DEC_BA_CF_1_PA.wav", item: "58", condition: "DEC", f1: "BA", f2: "CF", f3: "1", f4: "PA"},
+  { file: "59_DEC_LE_CS_1_PA.wav", item: "59", condition: "DEC", f1: "LE", f2: "CS", f3: "1", f4: "PA"},
+  { file: "60_DEC_MA_CS_1_PA.wav", item: "60", condition: "DEC", f1: "MA", f2: "CS", f3: "1", f4: "PA"},
+  { file: "61_DEC_BA_CF_2_N.wav", item: "61", condition: "DEC", f1: "BA", f2: "CF", f3: "2", f4: "N"},
+  { file: "62_DEC_LE_CS_2_N.wav", item: "62", condition: "DEC", f1: "LE", f2: "CS", f3: "2", f4: "N"},
+  { file: "63_DEC_MA_CS_2_N.wav", item: "63", condition: "DEC", f1: "MA", f2: "CS", f3: "2", f4: "N"},
+  { file: "64_DEC_BA_CF_2_D.wav", item: "64", condition: "DEC", f1: "BA", f2: "CF", f3: "2", f4: "D"},
+  { file: "65_DEC_LE_CS_2_D.wav", item: "65", condition: "DEC", f1: "LE", f2: "CS", f3: "2", f4: "D"},
+  { file: "66_DEC_MA_CS_2_D.wav", item: "66", condition: "DEC", f1: "MA", f2: "CS", f3: "2", f4: "D"},
+  { file: "67_DEC_BA_CF_2_X.wav", item: "67", condition: "DEC", f1: "BA", f2: "CF", f3: "2", f4: "X"},
+  { file: "68_DEC_LE_CS_2_X.wav", item: "68", condition: "DEC", f1: "LE", f2: "CS", f3: "2", f4: "X"},
+  { file: "69_DEC_MA_CS_2_X.wav", item: "69", condition: "DEC", f1: "MA", f2: "CS", f3: "2", f4: "X"},
+  { file: "70_DEC_BA_CF_2_W.wav", item: "70", condition: "DEC", f1: "BA", f2: "CF", f3: "2", f4: "W"},
+  { file: "71_DEC_LE_CS_2_W.wav", item: "71", condition: "DEC", f1: "LE", f2: "CS", f3: "2", f4: "W"},
+  { file: "72_DEC_MA_CS_2_W.wav", item: "72", condition: "DEC", f1: "MA", f2: "CS", f3: "2", f4: "W"},
+  { file: "73_DEC_BA_CF_3_M.wav", item: "73", condition: "DEC", f1: "BA", f2: "CF", f3: "3", f4: "M"},
+  { file: "74_DEC_LE_CS_3_M.wav", item: "74", condition: "DEC", f1: "LE", f2: "CS", f3: "3", f4: "M"},
+  { file: "75_DEC_MA_CS_3_M.wav", item: "75", condition: "DEC", f1: "MA", f2: "CS", f3: "3", f4: "M"},
+  { file: "76_DEC_BA_CF_3_X.wav", item: "76", condition: "DEC", f1: "BA", f2: "CF", f3: "3", f4: "X"},
+  { file: "77_DEC_LE_CS_3_X.wav", item: "77", condition: "DEC", f1: "LE", f2: "CS", f3: "3", f4: "X"},
+  { file: "78_DEC_MA_CS_3_X.wav", item: "78", condition: "DEC", f1: "MA", f2: "CS", f3: "3", f4: "X"},
+  { file: "79_DEC_BA_CF_3_Q.wav", item: "79", condition: "DEC", f1: "BA", f2: "CF", f3: "3", f4: "Q"},
+  { file: "80_DEC_LE_CS_3_Q.wav", item: "80", condition: "DEC", f1: "LE", f2: "CS", f3: "3", f4: "Q"},
+  { file: "81_DEC_MA_CS_3_Q.wav", item: "81", condition: "DEC", f1: "MA", f2: "CS", f3: "3", f4: "Q"},
+  { file: "82_DEC_BA_CF_3_J.wav", item: "82", condition: "DEC", f1: "BA", f2: "CF", f3: "3", f4: "J"},
+  { file: "83_DEC_LE_CS_3_J.wav", item: "83", condition: "DEC", f1: "LE", f2: "CS", f3: "3", f4: "J"},
+  { file: "84_DEC_MA_CS_3_J.wav", item: "84", condition: "DEC", f1: "MA", f2: "CS", f3: "3", f4: "J"},
+  { file: "85_DEC_BA_CF_4_M.wav", item: "85", condition: "DEC", f1: "BA", f2: "CF", f3: "4", f4: "M"},
+  { file: "86_DEC_LE_CS_4_M.wav", item: "86", condition: "DEC", f1: "LE", f2: "CS", f3: "4", f4: "M"},
+  { file: "87_DEC_MA_CS_4_M.wav", item: "87", condition: "DEC", f1: "MA", f2: "CS", f3: "4", f4: "M"},
+  { file: "88_DEC_BA_CF_4_J.wav", item: "88", condition: "DEC", f1: "BA", f2: "CF", f3: "4", f4: "J"},
+  { file: "89_DEC_LE_CS_4_J.wav", item: "89", condition: "DEC", f1: "LE", f2: "CS", f3: "4", f4: "J"},
+  { file: "90_DEC_MA_CS_4_J.wav", item: "90", condition: "DEC", f1: "MA", f2: "CS", f3: "4", f4: "J"},
+  { file: "91_DEC_BA_CF_4_H.wav", item: "91", condition: "DEC", f1: "BA", f2: "CF", f3: "4", f4: "H"},
+  { file: "92_DEC_LE_CS_4_H.wav", item: "92", condition: "DEC", f1: "LE", f2: "CS", f3: "4", f4: "H"},
+  { file: "93_DEC_MA_CS_4_H.wav", item: "93", condition: "DEC", f1: "MA", f2: "CS", f3: "4", f4: "H"},
+  { file: "94_DEC_BA_CF_4_Z.wav", item: "94", condition: "DEC", f1: "BA", f2: "CF", f3: "4", f4: "Z"},
+  { file: "95_DEC_LE_CS_4_Z.wav", item: "95", condition: "DEC", f1: "LE", f2: "CS", f3: "4", f4: "Z"},
+  { file: "96_DEC_MA_CS_4_Z.wav", item: "96", condition: "DEC", f1: "MA", f2: "CS", f3: "4", f4: "Z"},
+];
+
+// 1i. 休息间隔、结束后跳转、注意力检查
+const BREAK_EVERY = 48;
+const REDIRECT_URL = null;
+const ATTENTION_CHECKS = 3;
+const ATTENTION_AUDIO = "space.wav";
+
+// 1j. 研究信息
+const STUDY = {
+  piZh: "耿天琪，卡内基梅隆大学",
+  piEn: "Geng Tianqi, Carnegie Mellon University",
+  email: "tianqig@andrew.cmu.edu",
+  minutes: "20",
+  compensationZh: "0",
+  compensationEn: "0",
+  irbNumber: "STUDY2026_00000435"
+};
+
+/* =====================================================================
+ * 双语显示工具：中文在上，英文在下（灰色）
+ * ===================================================================== */
+function bi(zh, en) { return `${zh}<span class="en">${en}</span>`; }
+function p(zh, en) { return `<p>${bi(zh, en)}</p>`; }
+function biBtn(zh, en) { return `${zh}<br><small>${en}</small>`; }
+
+/* =====================================================================
+ * 2. 初始化 Firebase 和 jsPsych
+ * ===================================================================== */
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.database();
+const TS = firebase.database.ServerValue.TIMESTAMP;
+const ALLOC = db.ref(ALLOC_ROOT);
+
+const SESSION_START = new Date().toISOString();
+let SUBJECT_ID = null;   // participant code；新参与者在分配时生成，重进者沿用浏览器中保存的编号
+let RECORD = null;       // 页面打开时读到的 allocation 记录（重进者才有）
+let GROUP = null;        // "perception" | "naturalness"
+
+// 按键分配（只在 perception 组使用和记录）
+const KEY_MAPPING = (COUNTERBALANCE_KEYS && Math.random() < 0.5) ? "F_ex_J_wh" : "F_wh_J_ex";
+const KEY_OF = KEY_MAPPING === "F_wh_J_ex" ? { wh: "f", ex: "j" } : { wh: "j", ex: "f" };
+const CAT_OF = { [KEY_OF.wh]: "wh", [KEY_OF.ex]: "ex" };
+const LEFT_CAT  = CATEGORIES[CAT_OF["f"]];
+const RIGHT_CAT = CATEGORIES[CAT_OF["j"]];
+
+// 手机、平板（含 iPadOS 桌面模式 UA）
+const IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(navigator.userAgent) ||
+                  (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+
+// 实验反应数据只在任务结束时一次性写入（与原文件相同）；
+// allocation 节点只记录编号、组别、状态、时间与尝试次数，不含任何回答
+const jsPsych = initJsPsych();
+
+jsPsych.data.addProperties({
+  session_start: SESSION_START,
+  user_agent: navigator.userAgent,
+  screen_w: screen.width,
+  screen_h: screen.height
+});
+
+function sanitize(obj) {
+  return JSON.parse(JSON.stringify(obj, (k, v) => (v === undefined ? null : v)));
+}
+
+/* =====================================================================
+ * 3. participant code、随机分配与状态记录
+ * ---------------------------------------------------------------------
+ * allocation 节点：
+ *   counts/{perception, naturalness}  已分配人数，只能通过 transaction 逐个 +1
+ *   participants/{PID}               participant_code, assigned_group, status,
+ *                                    claimed_at, assigned_at, first_started_at,
+ *                                    started_at, completed_at, attempts
+ * status：allocating → assigned → started → completed
+ * localStorage 只能识别同一浏览器的重进，换设备/浏览器/无痕模式/清除数据后无法识别。
+ * ===================================================================== */
+const PID_PATTERN = /^S_[a-z0-9]{12}$/;
+
+function newPid() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";   // 32 个字符，随机字节 & 31 无偏
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return "S_" + Array.from(bytes, b => alphabet[b & 31]).join("");
+}
+
+function loadPid() {
+  try {
+    const v = localStorage.getItem(PID_STORAGE_KEY);
+    return v && PID_PATTERN.test(v) ? v : null;
+  } catch (e) { return null; }
+}
+function storePid(pid) {
+  try { localStorage.setItem(PID_STORAGE_KEY, pid); } catch (e) {}
+}
+
+function participantRef(pid) { return ALLOC.child("participants").child(pid); }
+
+// 离线时 Firebase 的读写不会报错而是一直等待，这里加超时
+function withTimeout(promise) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), NETWORK_TIMEOUT))
+  ]);
+}
+
+function isFull(c) {
+  c = c || {};
+  return (c.perception || 0) >= QUOTA.perception && (c.naturalness || 0) >= QUOTA.naturalness;
+}
+
+// 分配：重进者沿用原组；新参与者 ① 占位 ② transaction 抽签并 +1 ③ 写入组别
+// 抽签概率与剩余名额成正比，最终分配人数恰为 QUOTA，等价于把 80P + 80N 随机排列
+// 返回组别；名额已满时返回 null
+async function allocate() {
+  if (RECORD && RECORD.assigned_group) return RECORD.assigned_group;
+
+  const pid = SUBJECT_ID || newPid();
+  const ref = participantRef(pid);
+  if (!(RECORD && RECORD.status === "allocating")) {
+    await withTimeout(ref.set({ participant_code: pid, status: "allocating", claimed_at: TS }));
+  }
+
+  let chosen = null;
+  const result = await withTimeout(ALLOC.child("counts").transaction(c => {
+    c = c || {};
+    const n = { perception: c.perception || 0, naturalness: c.naturalness || 0 };
+    const left = {
+      perception:  Math.max(QUOTA.perception - n.perception, 0),
+      naturalness: Math.max(QUOTA.naturalness - n.naturalness, 0)
+    };
+    if (left.perception + left.naturalness === 0) { chosen = null; return; }   // 中止 transaction
+    chosen = Math.random() * (left.perception + left.naturalness) < left.perception
+      ? "perception" : "naturalness";
+    n[chosen]++;
+    return n;
+  }, undefined, false));
+
+  if (!result.committed) {
+    await withTimeout(ref.remove());   // 名额已满：撤销占位，不留下记录
+    return null;
+  }
+  await withTimeout(ref.update({ assigned_group: chosen, status: "assigned", assigned_at: TS }));
+  SUBJECT_ID = pid;
+  storePid(pid);
+  return chosen;
+}
+
+// 任务开始：status = started，attempts + 1
+function markStarted(done) {
+  const upd = {
+    status: "started",
+    started_at: TS,
+    attempts: firebase.database.ServerValue.increment(1)
+  };
+  if (!(RECORD && RECORD.first_started_at)) upd.first_started_at = TS;
+  withTimeout(participantRef(SUBJECT_ID).update(upd))
+    .then(() => done({ status_saved: true }))
+    .catch(err => {
+      console.error(err);
+      jsPsych.endExperiment(NETWORK_ERROR_MSG);
+    });
+}
+
+// 保存完整数据，并在同一次原子写入中把 status 设为 completed
+function saveComplete(group, payload) {
+  const statusPath = `${ALLOC_ROOT}/participants/${SUBJECT_ID}`;
+  return db.ref().update({
+    [`${DB_ROOT[group]}/${SUBJECT_ID}/complete`]: sanitize(payload),
+    [`${statusPath}/status`]: "completed",
+    [`${statusPath}/completed_at`]: TS
+  });
+}
+
+const NETWORK_ERROR_MSG = p("无法连接到服务器，请检查网络后刷新页面重试。如问题持续，请联系研究者：" + STUDY.email,
+  "Could not connect to the server. Please check your connection and refresh the page. If the problem persists, please contact the researcher at " + STUDY.email);
+const FULL_MSG = p("本研究的招募名额已满，感谢您的关注！现在可以关闭此窗口。",
+  "Recruitment for this study is now full. Thank you for your interest! You may now close this window.");
+const COMPLETED_MSG = p("您已经完成了本研究，每人只能参加一次。感谢您的参与！现在可以关闭此窗口。",
+  "You have already completed this study. Each person may take part only once. Thank you for participating! You may now close this window.");
+
+function showMessage(html) {
+  document.body.innerHTML = `<div class="status-msg">${html}</div>`;
+}
+
+/* =====================================================================
+ * 4. perception 任务的试次函数（原 experiment.html 第 3 部分）
+ * ---------------------------------------------------------------------
+ * audio-keyboard-response 的 rt 从音频开始计时。预加载后读取每条 wav
+ * 的实际时长，结束时计算 rt_from_offset = rt − 音频时长。
+ * 音频播放期间按键无效（response_allowed_while_playing:false），不会出现负值。
+ * 同时记录提交反应时的客户端时间戳 performance.now() 与 Date.now()。
+ * ===================================================================== */
+const STIM_DURATIONS = {};
+let currentStimDuration = null;
+
+function cacheDurations(files) {
+  files.forEach(f => {
+    jsPsych.pluginAPI.getAudioBuffer(f)
+      .then(buf => { STIM_DURATIONS[f] = buf.duration * 1000; })
+      .catch(err => console.error("Cannot read duration:", f, err));
+  });
+}
+
+function keyHintHTML() {
+  return `<div class="key-hint">
+      <div><b>F</b><br>${bi(LEFT_CAT.zh, LEFT_CAT.en)}</div>
+      <div><b>J</b><br>${bi(RIGHT_CAT.zh, RIGHT_CAT.en)}</div>
+    </div>`;
+}
+
+function audioTrial(stim, phase) {
+  return {
+    type: jsPsychAudioKeyboardResponse,
+    stimulus: stim.file,
+    choices: ["f", "j"],
+    prompt: keyHintHTML(),
+    response_allowed_while_playing: false,
+    trial_ends_after_audio: false,
+    trial_duration: null,
+    data: {
+      phase: phase,
+      item: stim.item,
+      condition: stim.condition,
+      intended: stim.intended ?? null,
+      stim_file: stim.file,
+      correct_category: stim.correct ?? null
+    },
+    on_start: function (trial) {
+      currentStimDuration = STIM_DURATIONS[stim.file] ?? null;
+      if (RESPONSE_WINDOW !== null && currentStimDuration !== null) {
+        trial.trial_duration = Math.ceil(currentStimDuration) + RESPONSE_WINDOW;
+      }
+    },
+    on_finish: function (data) {
+      const tNow = performance.now();
+      data.client_response_perf = tNow;
+      data.client_response_epoch = Date.now();
+      data.stim_duration_ms = currentStimDuration;
+      if (data.rt !== null && currentStimDuration !== null) {
+        data.rt_from_offset = Math.round(data.rt - currentStimDuration);
+        data.client_stim_offset_perf = tNow - data.rt_from_offset;
+      } else {
+        data.rt_from_offset = null;
+        data.client_stim_offset_perf = null;
+      }
+      data.key = data.response;
+      data.response_category = data.response ? CAT_OF[data.response] : null;   // "wh" 或 "ex"
+      data.correct = data.correct_category ? data.response_category === data.correct_category : null;
+      data.timed_out = data.response === null;
+    }
+  };
+}
+
+const fixation = {
+  type: jsPsychHtmlKeyboardResponse,
+  stimulus: '<div class="fixation">+</div>',
+  choices: "NO_KEYS",
+  trial_duration: 500,
+  data: { phase: "fixation" }
+};
+
+/* =====================================================================
+ * 5. naturalness 任务的打分页面（原 questionnaire.html 第 3 部分）
+ * ---------------------------------------------------------------------
+ * 每页一句：进入页面自动播放录音，可点击按钮重听。
+ * 第一次播放结束前量表和提交按钮不可用，确保被试听完再打分。
+ * 记录：rating（1–7）、rationale（选填理由）、play_count（播放次数）。不记录反应时。
+ * ===================================================================== */
+let stopCurrentAudio = null;
+
+// 播放预加载好的音频；兼容 WebAudio 与 HTML5 Audio 两种模式。返回停止播放的函数
+function playAudio(file, onEnded) {
+  let stopped = false;
+  let stopFn = () => { stopped = true; };
+  jsPsych.pluginAPI.getAudioBuffer(file).then(buf => {
+    if (stopped) return;
+    const ctx = jsPsych.pluginAPI.audioContext();
+    if (ctx !== null) {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.onended = onEnded;
+      src.start(ctx.currentTime);
+      stopFn = () => { src.onended = null; try { src.stop(); } catch (e) {} };
+    } else {
+      buf.currentTime = 0;
+      buf.onended = onEnded;
+      buf.play();
+      stopFn = () => { buf.onended = null; buf.pause(); };
+    }
+  }).catch(err => console.error("Cannot play:", file, err));
+  return () => stopFn();
+}
+
+function scaleHTML() {
+  let radios = "";
+  for (let v = SCALE_MIN; v <= SCALE_MAX; v++) {
+    radios += `<label>${v}<input type="radio" name="rating" value="${v}" required></label>`;
+  }
+  return `<div class="scale">${radios}</div>
+    <div class="scale-ends">
+      <div>${SCALE_MIN} = ${bi(SCALE_LOW.zh, SCALE_LOW.en)}</div>
+      <div style="text-align:right">${SCALE_MAX} = ${bi(SCALE_HIGH.zh, SCALE_HIGH.en)}</div>
+    </div>`;
+}
+
+function ratingTrial(stim, phase, progressText) {
+  let playCount = 0;
+  let spaceHandler = null;
+  const onSpace = (e) => { if (spaceHandler) spaceHandler(e); };
+  return {
+    type: jsPsychSurveyHtmlForm,
+    preamble: `<div class="progress">${progressText}</div>`,
+    html: `
+      <div class="play-row">
+        <button type="button" id="play-btn" class="jspsych-btn">${biBtn("▶ 重听", "▶ Play again")}</button>
+        <div id="play-status" class="play-status"></div>
+      </div>
+      <fieldset id="rating-area" disabled>
+        ${p("这句话听起来有多自然？", "How natural does this sentence sound?")}
+        ${scaleHTML()}
+        <div class="text-left">
+          <label for="rationale">${bi("您的理由（选填）", "Your reason (optional)")}</label>
+          <textarea id="rationale" name="rationale" class="rationale" rows="3"></textarea>
+        </div>
+      </fieldset>`,
+    button_label: "下一句 / Next",
+    data: {
+      phase: phase,
+      item: stim.item,
+      condition: stim.condition,
+      f1: stim.f1 ?? null, f2: stim.f2 ?? null, f3: stim.f3 ?? null, f4: stim.f4 ?? null,
+      stim_file: stim.file
+    },
+    on_load: function () {
+      const playBtn = document.getElementById("play-btn");
+      const status = document.getElementById("play-status");
+      const area = document.getElementById("rating-area");
+      const nextBtn = document.getElementById("jspsych-survey-html-form-next");
+      nextBtn.disabled = true;
+
+      const play = () => {
+        playCount++;
+        playBtn.disabled = true;
+        status.innerHTML = bi("正在播放……", "Playing...");
+        stopCurrentAudio = playAudio(stim.file, () => {
+          playBtn.disabled = false;
+          status.innerHTML = "";
+          area.disabled = false;
+          nextBtn.disabled = false;
+        });
+      };
+      playBtn.addEventListener("click", play);
+      play();
+
+      // 注意力检查页：听完录音后按空格键即通过（在理由框里打字时不算）
+      if (phase === "attention_check") {
+        spaceHandler = (e) => {
+          if (e.key !== " " || area.disabled || e.target.tagName === "TEXTAREA") return;
+          e.preventDefault();
+          spaceHandler = null;
+          document.removeEventListener("keydown", onSpace);
+          jsPsych.finishTrial({ pressed_space: true });
+        };
+        document.addEventListener("keydown", onSpace);
+      }
+    },
+    on_finish: function (data) {
+      if (stopCurrentAudio) stopCurrentAudio();
+      document.removeEventListener("keydown", onSpace);
+      if (phase === "attention_check") {
+        data.pressed_space = data.pressed_space === true;
+        data.correct = data.pressed_space;
+      }
+      const resp = data.response || {};
+      data.rating = resp.rating ? Number(resp.rating) : null;
+      const r = (resp.rationale || "").trim();
+      data.rationale = r === "" ? null : r;
+      data.play_count = playCount;
+      delete data.rt;
+      delete data.response;
+    }
+  };
+}
+
+// 注意力检查的位置：把正式试次均分为若干段，每段内随机选一个位置（避开每段开头 3 个试次）
+function attentionPositions(n) {
+  const segLen = Math.floor(n / ATTENTION_CHECKS);
+  return new Set(
+    Array.from({ length: ATTENTION_CHECKS }, (_, k) =>
+      k * segLen + 3 + Math.floor(Math.random() * (segLen - 4)))
+  );
+}
+
+/* =====================================================================
+ * 6. 共同部分：同意、筛选、设备与音量检测、分配
+ * ===================================================================== */
+const timeline = [];
+
+// 6.1 知情同意书（原文未改）
+timeline.push({
+  type: jsPsychHtmlButtonResponse,
+  stimulus: `
+    <div class="text-left">
+      <h2>${bi("知情同意书", "Informed Consent")}</h2>
+      ${p(`您好！我们诚邀您参加由卡内基梅隆大学的耿天琪开展的一项研究（${STUDY.irbNumber}）。参加本研究完全出于自愿。如果您选择参加，您将完成一项在线感知实验，以帮助我们了解普通话母语者如何理解口语。本研究并非对参与者语言能力的测试，不存在正确或错误的答案，请根据您的第一反应作答。`,
+          `We are inviting you to take part in a research study conducted by Tianqi Geng at Carnegie Mellon University (${STUDY.irbNumber}). Participation in this study is voluntary. If you choose to take part, you will complete an online perception experiment that will help us learn more about how native speakers of Mandarin interpret spoken language. This is not a test of your language ability. There are no right or wrong answers, and you should simply report your first impression.`)}
+      ${p(`邀请您参加本研究是因为您是普通话母语者，且年满18周岁。整个调查大约需要${STUDY.minutes}分钟完成。您可以随时关闭窗口退出本研究，不会受到任何惩罚。数据仅在您完成全部实验后才会保存；如中途退出，您的任何回答都不会被保存。`,
+          `You have been asked to take part because you are a native speaker of Mandarin aged 18 and above. The survey will take about ${STUDY.minutes} minutes to complete. You may stop participating at any time by closing this window, without penalty. Your data are saved only after you complete the entire study; if you withdraw before finishing, none of your responses will be saved.`)}
+      ${p("本研究不会收集直接身份识别信息。我们会收集年龄、性别等可能对研究有所帮助的背景信息。对于任何您不愿提供的背景信息，您可以选择跳过。",
+          "This study will not collect direct identifiers. Background information like gender and age may be helpful and therefore will be gathered. You may skip any demographic questions you do not wish to answer.")}
+      ${p("我们不会获取任何能够识别您身份的信息，也不会以任何形式对您进行录音或录像。研究数据可能会被共享、公开，或用于未来的研究或商业用途。",
+          "We will not be obtaining any information that can identify you or recording you in any way. Study data may be shared, made public, or used for future research or commercial purposes.")}
+      ${p(`如果您对本研究有任何疑问，请联系研究者：${STUDY.email}<br>如果您对作为研究参与者的权利有任何疑问或担忧，可以联系卡内基梅隆大学机构审查委员会（IRB）：(412) 268-4721，或发送邮件至 IRB-review@andrew.cmu.edu`,
+          `Questions? Please contact us at ${STUDY.email}. If you have questions or concerns about your rights as a research participant, you can contact the Carnegie Mellon IRB at (412) 268-4721, IRB-review@andrew.cmu.edu.`)}
+      ${p("如果您愿意参加本研究，请点击“我同意”按钮开始实验。",
+          "If you want to participate in this study, click the “I agree” button to start the survey.")}
+    </div>`,
+  choices: [biBtn("我同意", "I agree"), biBtn("我不同意", "I do not agree")],
+  data: { phase: "consent" },
+  on_finish: function (data) {
+    data.consent = data.response === 0;
+    if (!data.consent) {
+      jsPsych.endExperiment(p("您已选择不参加本研究，现在可以关闭此窗口。",
+                              "You have chosen not to participate. You may now close this window."));
+    }
+  }
+});
+
+// 6.2 设备检查：两组都要求使用带实体键盘的电脑（perception 需要 F/J 键）；答案不保存
+timeline.push({
+  type: jsPsychSurveyHtmlForm,
+  preamble: `<h2>${bi("设备确认", "Device check")}</h2>
+    ${p("本研究需要在带实体键盘的电脑（台式机或笔记本）上完成。",
+        "This study must be completed on a computer (desktop or laptop) with a physical keyboard.")}`,
+  html: `
+    <div class="form-row"><label>${bi("您现在是否在使用带实体键盘的电脑？", "Are you using a computer with a physical keyboard?")}</label>
+      <select name="keyboard" required>
+        <option value="">-- 请选择 / Select --</option>
+        <option value="yes">是 / Yes</option>
+        <option value="no">否 / No</option>
+      </select></div>`,
+  button_label: "继续 / Continue",
+  data: { phase: "device_check" },
+  on_finish: function (data) {
+    const ok = data.response.keyboard === "yes" && !IS_MOBILE;
+    delete data.response;
+    if (!ok) {
+      jsPsych.endExperiment(p("很抱歉，本研究需要在带实体键盘的电脑上完成。如果您是在手机或微信中打开的链接，请复制链接，改用电脑上的浏览器打开。感谢您的关注。",
+                              "Sorry, this study must be completed on a computer with a physical keyboard. If you opened this link on a phone or in WeChat, please copy the link and open it in a browser on a computer. Thank you for your interest."));
+    }
+  }
+});
+
+// 6.3 人口学信息与资格筛查（原文未改）
+timeline.push({
+  type: jsPsychSurveyHtmlForm,
+  preamble: `<h2>${bi("个人信息", "About you")}</h2>
+    <div class="text-left">
+      ${p("年龄、方言背景、其他语言经验等因素都可能影响人们对普通话语调的感知。了解这些背景信息有助于我们更准确地分析和解释实验结果。这些信息仅以匿名形式用于研究分析，不会用于识别您的身份。",
+          "Factors such as age, dialect background, and experience with other languages can affect how people perceive Mandarin intonation. This background information helps us analyze and interpret the results more accurately. It is used only in anonymous form for research analysis and will not be used to identify you.")}
+      ${p("由于本研究仅面向年满 18 周岁、听力正常的参与者，年龄和听力两项为必答；其余问题均可选择跳过。",
+          "Because this study is open only to adults aged 18 or older with normal hearing, the age and hearing questions are required; you may skip any of the other questions.")}
+    </div>`,
+  html: `
+    <div class="form-row"><label>${bi("年龄", "Age")}</label>
+      <input name="age" type="text" inputmode="numeric" maxlength="3" required
+             pattern="[0-9]{1,3}" title="请输入数字 / Please enter a number"></div>
+    <div class="form-row"><label>${bi("性别", "Gender")}</label>
+      <select name="gender">
+        <option value="">-- 请选择 / Select --</option>
+        <option value="female">女 / Female</option>
+        <option value="male">男 / Male</option>
+        <option value="other">其他 / Other</option>
+        <option value="na">不愿透露 / Prefer not to say</option>
+      </select></div>
+    <div class="form-row"><label>${bi("成长地区（省/市）", "Where you grew up (province/city)")}</label>
+      <input name="region" type="text"></div>
+    <div class="form-row"><label>${bi("会说的方言（如有）", "Chinese dialect(s) you speak, if any")}</label>
+      <input name="dialects" type="text"></div>
+    <div class="form-row"><label>${bi("会说的其他语言", "Other languages you speak")}</label>
+      <input name="other_languages" type="text"></div>
+    <div class="form-row"><label>${bi("在非中文环境中居住的年数", "Years lived outside Chinese-speaking regions")}</label>
+      <input name="years_abroad" type="number" min="0" max="99" step="0.5"></div>
+    <div class="form-row"><label>${bi("是否有已知的听力问题？", "Any known hearing problems?")}</label>
+      <select name="hearing" required>
+        <option value="">-- 请选择 / Select --</option>
+        <option value="no">否 / No</option>
+        <option value="yes">是 / Yes</option>
+      </select></div>`,
+  button_label: "继续 / Continue",
+  data: { phase: "demographics" },
+  on_load: function () {
+    // 中文输入法下可能输入全角数字（如“２３”），自动转成半角，并去掉其他字符
+    const ageInput = document.querySelector('input[name="age"]');
+    ageInput.addEventListener("input", () => {
+      ageInput.value = ageInput.value
+        .replace(/[０-９]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0))
+        .replace(/[^0-9]/g, "");
+    });
+  },
+  on_finish: function (data) {
+    jsPsych.data.addProperties({ demographics: data.response });
+    // 资格筛查：未满 18 岁或有听力问题者不能继续（中途结束，数据不保存）
+    const age = parseInt(data.response.age, 10);
+    if (age < 18) {
+      jsPsych.endExperiment(p("很抱歉，本研究仅面向年满 18 周岁的参与者，您无法继续本实验。感谢您的关注，现在可以关闭此窗口。",
+                              "Sorry, this study is open only to participants aged 18 or older, so you cannot continue. Thank you for your interest. You may now close this window."));
+    } else if (data.response.hearing === "yes") {
+      jsPsych.endExperiment(p("很抱歉，本研究需要参与者听力正常，您无法继续本实验。感谢您的关注，现在可以关闭此窗口。",
+                              "Sorry, this study requires normal hearing, so you cannot continue. Thank you for your interest. You may now close this window."));
+    }
+  }
+});
+
+// 6.4 预加载音频（两个任务的全部音频）：放在同意与筛查之后，同意前不下载任何音频
+timeline.push({
+  type: jsPsychPreload,
+  audio: [...CHECK_ITEMS.map(c => c.file), ATTENTION_AUDIO, ...PERCEPTION_PRACTICE.map(s => s.file), ...MAIN_STIMULI.map(s => s.file)],
+  show_progress_bar: true,
+  message: p("正在加载音频，请稍候……", "Loading audio files, please wait..."),
+  error_message: p("实验加载失败，请刷新页面或联系研究者。",
+                   "The experiment failed to load. Please refresh the page or contact the researcher."),
+  // 调试用：在页面上列出加载失败的文件。正式上线前可改为 false
+  show_detailed_errors: true,
+  max_load_time: 60000,
+  data: { phase: "preload" },
+  on_error: function (file) { console.error("音频加载失败 / Failed to load:", file); },
+  on_finish: function () {
+    cacheDurations([...PERCEPTION_PRACTICE.map(s => s.file), ...MAIN_STIMULI.map(s => s.file)]);
+  }
+});
+
+// 6.5 进入全屏
+timeline.push({
+  type: jsPsychFullscreen,
+  fullscreen_mode: true,
+  message: p("实验将切换到全屏模式。", "The experiment will now switch to full-screen mode."),
+  button_label: "继续 / Continue",
+  data: { phase: "fullscreen" }
+});
+
+// 6.6 耳机与音量检测（分配之前；未通过者不占名额）
+timeline.push({
+  type: jsPsychHtmlButtonResponse,
+  stimulus: `
+    <div class="text-left">
+      <h2>${bi("音频设置", "Audio setup")}</h2>
+      ${p("请现在戴上<b>耳机</b>，并确认您处于安静的环境中。",
+          "Please put on your <b>headphones</b> now and make sure you are in a quiet place.")}
+      ${p("下一页会播放一个词语。请把音量调到舒适的大小，然后选出您听到的词。",
+          "On the next page you will hear a word. Adjust your volume to a comfortable level, then choose the word you heard.")}
+    </div>`,
+  choices: [biBtn("我已戴好耳机", "I am wearing headphones")],
+  data: { phase: "headphone_confirm" }
+});
+
+let checkAttempts = 0;
+let checkTarget = null;   // 本次播放的词（CHECK_ITEMS 中的一项）
+timeline.push({
+  conditional_function: () => CHECK_ITEMS.length > 0,
+  timeline: [{
+    type: jsPsychAudioButtonResponse,
+    on_start: function (trial) {
+      // 随机选一个词；重试时不与上一次相同
+      const pool = CHECK_ITEMS.filter(c => c !== checkTarget);
+      checkTarget = jsPsych.randomization.sampleWithoutReplacement(pool, 1)[0];
+      trial.stimulus = checkTarget.file;
+    },
+    stimulus: CHECK_ITEMS.length ? CHECK_ITEMS[0].file : null,  // 占位，实际由 on_start 设定
+    choices: CHECK_ITEMS.map(c => biBtn(c.zh, c.en)),
+    prompt: p("您听到的是哪个词？", "Which word did you hear?"),
+    response_allowed_while_playing: false,
+    data: { phase: "sound_check" },
+    on_finish: function (data) {
+      checkAttempts++;
+      data.attempt = checkAttempts;
+      data.check_target = checkTarget.en;
+      data.check_response = CHECK_ITEMS[data.response].en;
+      data.correct = CHECK_ITEMS[data.response] === checkTarget;
+      // 连续答错达到上限则结束（endExperiment 需在 on_finish 中调用才生效）
+      if (!data.correct && checkAttempts >= CHECK_MAX_ATTEMPTS) {
+        jsPsych.data.addProperties({ sound_check_failed: true });
+        jsPsych.endExperiment(p("很抱歉，我们无法确认您的音频设置，您无法继续本实验。感谢您的时间。",
+          "Unfortunately we could not verify your audio setup, so you cannot continue. Thank you for your time."));
+      }
+    }
+  }],
+  loop_function: function (data) {
+    return !data.values()[0].correct && checkAttempts < CHECK_MAX_ATTEMPTS;
+  }
+});
+
+// 6.7 随机分配（重进者沿用原组）
+timeline.push({
+  type: jsPsychCallFunction,
+  async: true,
+  func: function (done) {
+    const returning = !!(RECORD && RECORD.assigned_group);
+    allocate()
+      .then(group => {
+        if (group === null) { jsPsych.endExperiment(FULL_MSG); return; }
+        GROUP = group;
+        jsPsych.data.addProperties({ subject_id: SUBJECT_ID });
+        if (group === "perception") jsPsych.data.addProperties({ key_mapping: KEY_MAPPING });
+        done({ assigned_group: group, returning: returning });
+      })
+      .catch(err => {
+        console.error(err);
+        jsPsych.endExperiment(NETWORK_ERROR_MSG);
+      });
+  },
+  data: { phase: "allocation" }
+});
+
+/* =====================================================================
+ * 7. perception 任务（原 experiment.html 4.6–4.11）
+ * ===================================================================== */
+function buildPerceptionTimeline() {
+  const tl = [];
+
+  tl.push({ type: jsPsychCallFunction, async: true, func: markStarted, data: { phase: "task_start" } });
+
+  // 指导语
+  tl.push({
+    type: jsPsychInstructions,
+    pages: [
+      `<div class="text-left"><h2>${bi("实验说明", "Instructions")}</h2>
+        ${p("在每个试次中，屏幕中央会先出现一个“+”，随后您会听到一句普通话。每句话里都有“什么”这个词。",
+            "In each trial, a cross (+) will appear, followed by a spoken Mandarin sentence. Each sentence contains the word “shenme” (什么).")}
+        ${p("“什么”有两种意思：",
+            "“shenme” can mean two different things:")}
+        <div class="example">${bi(`<b>疑问词</b>：“什么”在提问，意思是“什么东西？”<br>例如：${EXAMPLE_WH}`,
+            `<b>Question word</b>: “shenme” asks a question, meaning <i>what?</i><br>e.g. ${EXAMPLE_WH} (What does he want to eat? I’ll make it for him.)`)}</div>
+        <div class="example">${bi(`<b>存在量词</b>：“什么”表示“某个东西”，不是在提问<br>例如：${EXAMPLE_EX}`,
+            `<b>Existential quantifier</b>: “shenme” means <i>something</i>; nothing is being asked<br>e.g. ${EXAMPLE_EX} (He wants to eat something. Then let him eat.)`)}</div>
+        ${p("请根据您<b>听到的</b>语气判断这句话是哪一种。",
+            "Please judge which meaning the sentence has, based on how it <b>sounds</b>.")}
+      </div>`,
+      `<div class="text-left"><h2>${bi("按键", "Keys")}</h2>
+        ${p("<b>听完整句话之后</b>再按键（播放过程中按键无效）：",
+            "Press a key <b>after the sentence has finished playing</b> (key presses during playback are ignored):")}
+        ${keyHintHTML()}
+        <br>
+        ${p("请把左手食指放在 F 键上，右手食指放在 J 键上，尽量又快又准地作答。",
+            "Keep your left index finger on F and your right index finger on J, and respond as quickly and accurately as possible.")}
+        ${p(`接下来先进行 ${PERCEPTION_PRACTICE.length} 个练习试次。`,
+            `You will begin with ${PERCEPTION_PRACTICE.length} practice trials.`)}
+      </div>`
+    ],
+    show_clickable_nav: true,
+    button_label_next: "下一页 / Next",
+    button_label_previous: "上一页 / Back",
+    data: { phase: "instructions" }
+  });
+
+  // 练习（带反馈）
+  jsPsych.randomization.shuffle(PERCEPTION_PRACTICE).forEach(stim => {
+    tl.push(fixation, audioTrial(stim, "practice"));
+    tl.push({
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: function () {
+        const last = jsPsych.data.get().last(1).values()[0];
+        if (last.correct === true)
+          return `<p style="color:green;font-size:24px">${bi("正确", "Correct")}</p>`;
+        if (last.correct === false) {
+          const right = CATEGORIES[last.correct_category];
+          return `<p style="color:red;font-size:24px">${bi("错误", "Incorrect")}</p>` +
+            p(`这句话是<b>${right.zh}</b>，应按 <b>${KEY_OF[right.code].toUpperCase()}</b> 键。`,
+              `This sentence is a <b>${right.en}</b>; the correct key is <b>${KEY_OF[right.code].toUpperCase()}</b>.`);
+        }
+        return p("已记录", "Response recorded");
+      },
+      choices: "NO_KEYS",
+      trial_duration: function () {
+        return jsPsych.data.get().last(1).values()[0].correct === false ? 2500 : 900;
+      },
+      data: { phase: "practice_feedback" }
+    });
+  });
+
+  tl.push({
+    type: jsPsychHtmlButtonResponse,
+    stimulus: p("练习结束，正式实验马上开始。正式实验中不再提供对错反馈。",
+                "Practice is complete. The main experiment will now begin. You will no longer receive feedback.") +
+              keyHintHTML(),
+    choices: [biBtn("开始", "Start")],
+    data: { phase: "pre_main" }
+  });
+
+  // 正式实验：每个被试完全随机顺序，随机插入注意力检查
+  const mainOrder = jsPsych.randomization.shuffle(MAIN_STIMULI);
+  const attentionAfter = attentionPositions(mainOrder.length);
+  let attentionCount = 0;
+
+  function attentionTrial() {
+    attentionCount++;
+    return {
+      type: jsPsychAudioKeyboardResponse,
+      stimulus: ATTENTION_AUDIO,
+      choices: ["f", "j", " "],
+      prompt: keyHintHTML(),
+      response_allowed_while_playing: false,
+      trial_ends_after_audio: false,
+      data: { phase: "attention_check", attention_index: attentionCount, stim_file: ATTENTION_AUDIO },
+      on_finish: function (data) {
+        data.key = data.response === " " ? "space" : data.response;
+        data.correct = data.response === " ";
+      }
+    };
+  }
+
+  mainOrder.forEach((stim, i) => {
+    const t = audioTrial(stim, "main");
+    t.data.trial_index_main = i + 1;
+    tl.push(fixation, t);
+    if (attentionAfter.has(i)) tl.push(fixation, attentionTrial());
+    if ((i + 1) % BREAK_EVERY === 0 && i + 1 < mainOrder.length) {
+      tl.push({
+        type: jsPsychHtmlButtonResponse,
+        stimulus: p(`您已完成 ${i + 1} / ${mainOrder.length} 个试次，请稍作休息。`,
+                    `You have completed ${i + 1} of ${mainOrder.length} trials. Please take a short break.`) +
+                  keyHintHTML(),
+        choices: [biBtn("继续", "Continue")],
+        data: { phase: "break" }
+      });
+    }
+  });
+
+  // 退出全屏
+  tl.push({ type: jsPsychFullscreen, fullscreen_mode: false, data: { phase: "fullscreen_exit" } });
+
+  // 保存完整数据（写入完成后才显示结束页）
+  tl.push({
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: p("正在保存数据，请勿关闭页面……", "Saving your data, please do not close this page..."),
+    choices: "NO_KEYS",
+    trial_duration: 300,
+    data: { phase: "saving_msg" }
+  });
+  tl.push({
+    type: jsPsychCallFunction,
+    async: true,
+    func: function (done) {
+      const all = jsPsych.data.get();
+      saveComplete("perception", {
+        subject_id: SUBJECT_ID,
+        key_mapping: KEY_MAPPING,
+        session_start: SESSION_START,
+        session_end: new Date().toISOString(),
+        main_trials: all.filter({ phase: "main" }).values(),
+        attention_passed: all.filter({ phase: "attention_check", correct: true }).count(),
+        attention_total: all.filter({ phase: "attention_check" }).count(),
+        all_data_csv: all.csv()
+      })
+        .then(() => done({ saved: true }))
+        .catch(err => { console.error(err); done({ saved: false, error: String(err) }); });
+    },
+    data: { phase: "save" }
+  });
+
+  // Debriefing 与致谢（原文未改）
+  tl.push({
+    type: jsPsychHtmlButtonResponse,
+    stimulus: `
+      <div class="text-left">
+        <h2>感谢您的参与！</h2>
+        <p>非常感谢您花时间参与本研究。您的回答对我们了解母语使用者对汉语的理解过程非常有帮助。</p>
+        <h3>本研究的目的：</h3>
+        <p>本研究探讨的是汉语母语者如何理解含有“什么”的句子。“什么”在汉语中可以有不同的用法。例如，它可以表示疑问（“你买了什么？”），也可以表示不确定的事物（“我想吃点什么”）。</p>
+        <h3>研究假设：</h3>
+        <p>在实验开始前，我们没有说明具体的研究假设，因为事先知道假设可能会影响您的自然判断。现在我们可以告诉您：</p>
+        <p>本研究关注的是听者或读者在判断“什么”的含义时，会依赖哪些线索，以及这些线索各自的权重有多大。我们考察的线索包括语调信息和形态句法信息（完成体的标记词“了”和句末语气词“吗”）。我们预期当不同线索给出相互矛盾的信息时，母语使用者会更倾向于依赖语调线索。</p>
+        <h3>数据保密：</h3>
+        <p>您的回答将以匿名方式保存，仅用于学术研究。</p>
+        <h3>联系方式:</h3>
+        <p>如果您对本研究有任何疑问，请联系研究者：tianqig@andrew.cmu.edu</p>
+        <p>如果您对作为研究参与者的权利有任何疑问或担忧，可以联系卡内基梅隆大学机构审查委员会（IRB）：(412) 268-4721，或发送邮件至 IRB-review@andrew.cmu.edu</p>
+        <p>再次感谢您的参与！</p>
+        <hr>
+        <h2>Thank You for Participating!</h2>
+        <p>Thank you very much for taking the time to participate in this study. Your responses are very valuable in helping us understand how native speakers process Mandarin Chinese.</p>
+        <h3>Purpose of the Study</h3>
+        <p>This study investigates how native speakers of Mandarin interpret sentences containing the word shenme (什么). In Mandarin, shenme can be used in different ways. For example, it can function as a question word ("你买了什么？" What did you buy?), or it can refer to something indefinite as an existential quantifier ("我想吃点什么" I'd like to eat something).</p>
+        <h3>Research Hypotheses</h3>
+        <p>Before the experiment, we did not state the specific hypotheses, because knowing them in advance might have influenced your natural judgments. We can now share them with you:</p>
+        <p>This study examines which cues listeners rely on when determining the meaning of shenme, and how much weight each cue carries. The cues we examined include prosodic information (intonation) and morphosyntactic information (the perfective aspect marker le 了 and the sentence-final question particle ma 吗). We predict that when different cues provide conflicting information, native speakers will rely more heavily on prosodic cues.</p>
+        <h3>Confidentiality</h3>
+        <p>Your responses will be stored anonymously and used for academic research purposes only.</p>
+        <h3>Contact Information</h3>
+        <p>If you have any questions about this study, please contact the researcher at tianqig@andrew.cmu.edu.</p>
+        <p>If you have any questions or concerns about your rights as a research participant, you may contact the Carnegie Mellon University Institutional Review Board (IRB) at (412) 268-4721 or IRB-review@andrew.cmu.edu.</p>
+        <p>Thank you again for your participation!</p>
+      </div>`,
+    choices: [biBtn("完成", "Finish")],
+    data: { phase: "debrief" },
+    on_finish: function () {
+      if (REDIRECT_URL) window.location.href = REDIRECT_URL;
+    }
+  });
+
+  return tl;
+}
+
+/* =====================================================================
+ * 8. naturalness 任务（原 questionnaire.html 4.6–4.11）
+ * ===================================================================== */
+function buildNaturalnessTimeline() {
+  const tl = [];
+
+  tl.push({ type: jsPsychCallFunction, async: true, func: markStarted, data: { phase: "task_start" } });
+
+  // 指导语
+  tl.push({
+    type: jsPsychInstructions,
+    pages: [
+      `<div class="text-left"><h2>${bi("问卷说明", "Instructions")}</h2>
+        ${p("在接下来的每一页中，您会听到一句普通话录音。录音会自动播放，您也可以点击“重听”再听一遍。",
+            "On each of the following pages you will hear a spoken Mandarin sentence. It plays automatically, and you can click “Play again” to hear it again.")}
+        ${p(`听完后，请在 ${SCALE_MIN}–${SCALE_MAX} 的量表上评价这句话听起来有多<b>自然</b>：${SCALE_MIN} = ${SCALE_LOW.zh}，${SCALE_MAX} = ${SCALE_HIGH.zh}。`,
+            `After listening, rate how <b>natural</b> the sentence sounds on a scale from ${SCALE_MIN} to ${SCALE_MAX} (${SCALE_MIN} = ${SCALE_LOW.en}, ${SCALE_MAX} = ${SCALE_HIGH.en}).`)}
+        ${p("每句话下方有一个选填的文本框，您可以简单写下打分的理由，也可以留空。",
+            "Below each rating there is an optional text box where you may briefly explain your rating, or leave it blank.")}
+        ${p("答案没有对错之分，请根据您的第一感觉作答。",
+            "There are no right or wrong answers. Please go with your first impression.")}
+        ${NATURALNESS_PRACTICE.length ? p(`接下来先进行 ${NATURALNESS_PRACTICE.length} 句练习。`,
+            `You will begin with ${NATURALNESS_PRACTICE.length} practice sentences.`) : ""}
+      </div>`
+    ],
+    show_clickable_nav: true,
+    button_label_next: "开始 / Start",
+    data: { phase: "instructions" }
+  });
+
+  // 练习（不给反馈）
+  jsPsych.randomization.shuffle(NATURALNESS_PRACTICE).forEach((stim, i) => {
+    tl.push(ratingTrial(stim, "practice",
+      bi(`练习 ${i + 1} / ${NATURALNESS_PRACTICE.length}`, `Practice ${i + 1} of ${NATURALNESS_PRACTICE.length}`)));
+  });
+
+  if (NATURALNESS_PRACTICE.length) {
+    tl.push({
+      type: jsPsychHtmlButtonResponse,
+      stimulus: p("练习结束，正式问卷马上开始。", "Practice is complete. The main questionnaire will now begin."),
+      choices: [biBtn("开始", "Start")],
+      data: { phase: "pre_main" }
+    });
+  }
+
+  // 正式问卷：每个被试完全随机顺序，随机插入注意力检查
+  const mainOrder = jsPsych.randomization.shuffle(MAIN_STIMULI);
+  const attentionAfter = attentionPositions(mainOrder.length);
+  let attentionCount = 0;
+
+  function attentionTrial() {
+    attentionCount++;
+    const t = ratingTrial({ file: ATTENTION_AUDIO, item: "attention", condition: "attention" },
+                          "attention_check", "");
+    t.data.attention_index = attentionCount;
+    return t;
+  }
+
+  mainOrder.forEach((stim, i) => {
+    tl.push(ratingTrial(stim, "main",
+      bi(`第 ${i + 1} / ${mainOrder.length} 句`, `Sentence ${i + 1} of ${mainOrder.length}`)));
+    tl[tl.length - 1].data.trial_index_main = i + 1;
+    if (attentionAfter.has(i)) tl.push(attentionTrial());
+    if ((i + 1) % BREAK_EVERY === 0 && i + 1 < mainOrder.length) {
+      tl.push({
+        type: jsPsychHtmlButtonResponse,
+        stimulus: p(`您已完成 ${i + 1} / ${mainOrder.length} 句，请稍作休息。`,
+                    `You have completed ${i + 1} of ${mainOrder.length} sentences. Please take a short break.`),
+        choices: [biBtn("继续", "Continue")],
+        data: { phase: "break" }
+      });
+    }
+  });
+
+  // 退出全屏
+  tl.push({ type: jsPsychFullscreen, fullscreen_mode: false, data: { phase: "fullscreen_exit" } });
+
+  // 保存完整数据（写入完成后才显示结束页）
+  tl.push({
+    type: jsPsychHtmlKeyboardResponse,
+    stimulus: p("正在保存数据，请勿关闭页面……", "Saving your data, please do not close this page..."),
+    choices: "NO_KEYS",
+    trial_duration: 300,
+    data: { phase: "saving_msg" }
+  });
+  tl.push({
+    type: jsPsychCallFunction,
+    async: true,
+    func: function (done) {
+      const all = jsPsych.data.get();
+      saveComplete("naturalness", {
+        subject_id: SUBJECT_ID,
+        session_start: SESSION_START,
+        session_end: new Date().toISOString(),
+        ratings: all.filter({ phase: "main" }).values(),
+        attention_passed: all.filter({ phase: "attention_check", correct: true }).count(),
+        attention_total: all.filter({ phase: "attention_check" }).count(),
+        all_data_csv: all.csv()
+      })
+        .then(() => done({ saved: true }))
+        .catch(err => { console.error(err); done({ saved: false, error: String(err) }); });
+    },
+    data: { phase: "save" }
+  });
+
+  // Debriefing 与致谢（原文未改）
+  tl.push({
+    type: jsPsychHtmlButtonResponse,
+    stimulus: `
+      <div class="text-left">
+        <h2>${bi("感谢您的参与！", "Thank you for participating!")}</h2>
+        ${p("<b>研究说明：</b>在普通话中，“什么”既可以用来提问（疑问词），也可以表示“某个东西”（不定用法）。本问卷收集普通话母语者对不同韵律（如语调、重音、停顿）下这些句子自然度的判断。",
+            "<b>About this study:</b> In Mandarin, “shenme” can be used either to ask a question (a wh-word) or to mean “something” (an indefinite). This questionnaire collects native speakers’ judgments of how natural these sentences sound with different prosody, such as intonation, stress, and pauses.")}
+        ${p(`如有任何疑问，请联系 ${STUDY.email}。请不要向可能参加本研究的人透露问卷内容。`,
+            `If you have any questions, please contact ${STUDY.email}. Please do not discuss the study with others who may participate.`)}
+      </div>`,
+    choices: [biBtn("完成", "Finish")],
+    data: { phase: "debrief" },
+    on_finish: function () {
+      if (REDIRECT_URL) window.location.href = REDIRECT_URL;
+    }
+  });
+
+  return tl;
+}
+
+timeline.push({ timeline: buildPerceptionTimeline(),  conditional_function: () => GROUP === "perception" });
+timeline.push({ timeline: buildNaturalnessTimeline(), conditional_function: () => GROUP === "naturalness" });
+
+/* =====================================================================
+ * 9. 启动：先检查本浏览器是否已有编号（已完成 / 重进），以及名额是否已满
+ * ===================================================================== */
+async function boot() {
+  showMessage(p("正在连接服务器，请稍候……", "Connecting, please wait..."));
+  try {
+    const pid = loadPid();
+    if (pid) {
+      RECORD = (await withTimeout(participantRef(pid).once("value"))).val();
+      if (RECORD) SUBJECT_ID = pid;
+    }
+    if (RECORD && RECORD.status === "completed") { showMessage(COMPLETED_MSG); return; }
+    if (!(RECORD && RECORD.assigned_group)) {
+      const counts = (await withTimeout(ALLOC.child("counts").once("value"))).val();
+      if (isFull(counts)) { showMessage(FULL_MSG); return; }
+    }
+  } catch (err) {
+    console.error(err);
+    showMessage(NETWORK_ERROR_MSG);
+    return;
+  }
+  document.body.innerHTML = "";
+  jsPsych.run(timeline);
+}
+
+boot();
+</script>
+</html>
